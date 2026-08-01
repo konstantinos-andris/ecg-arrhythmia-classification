@@ -1,7 +1,5 @@
 tensorflow
 numpy
-pandas
-scipy
 scikit-learn
 imbalanced-learn
 wfdb
