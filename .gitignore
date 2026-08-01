@@ -179,3 +179,23 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# MIT-BIH data
+data/*
+!data/README.md
+
+# Trained models
+models/*
+!models/.gitkeep
+
+# Generated figures
+results/figures/*
+!results/figures/.gitkeep
+
+# Model and array files
+*.h5
+*.keras
+*.npy
+*.npz
+
+# macOS
+.DS_Store
