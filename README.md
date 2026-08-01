@@ -114,3 +114,48 @@ University of Thessaly
 ## License
 
 The source code and research materials are currently shared for academic and portfolio purposes. A formal license will be selected after confirming the publication and collaboration requirements.
+# Dataset
+
+This project uses the MIT-BIH Arrhythmia Database, available through PhysioNet.
+
+## Records Used
+
+### Training Set
+
+- 100
+- 101
+- 102
+- 103
+- 104
+- 105
+- 115
+
+### Test Set
+
+- 106
+
+Record 106 is kept completely separate from the training process to support strict inter-patient evaluation.
+
+## Download
+
+The dataset is not included in this repository.
+
+It can be downloaded from PhysioNet using the WFDB Python package:
+
+```python
+import wfdb
+
+records = ["100", "101", "102", "103", "104", "105", "106", "115"]
+
+wfdb.dl_database(
+    "mitdb",
+    dl_dir="data/mit-bih",
+    records=records
+)
+```
+
+## Important
+
+Dataset files should remain inside the `data/` directory and must not be committed to GitHub.
+
+The repository's `.gitignore` excludes these files while preserving this documentation file.
