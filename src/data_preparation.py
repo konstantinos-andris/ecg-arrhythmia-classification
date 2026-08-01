@@ -1,5 +1,6 @@
 """Download and preprocess ECG beats from the MIT-BIH database."""
 
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -10,11 +11,7 @@ TRAIN_RECORDS = ["100", "101", "102", "103", "104", "105", "115"]
 TEST_RECORDS = ["106"]
 ALL_RECORDS = TRAIN_RECORDS + TEST_RECORDS
 
-LABEL_MAPPING = {
-    "N": 0,  # Normal
-    "A": 1,  # Atrial / supraventricular
-    "V": 2,  # Ventricular
-}
+VALID_SYMBOLS = {"N", "A", "V"}
 
 WINDOW_BEFORE_R_PEAK = 100
 WINDOW_AFTER_R_PEAK = 100
@@ -25,87 +22,114 @@ DATA_DIRECTORY = PROJECT_ROOT / "data" / "mit-bih"
 PROCESSED_DIRECTORY = PROJECT_ROOT / "data" / "processed"
 
 
+def record_is_available(record_id: str) -> bool:
+    """Check whether the required local files exist for one record."""
+
+    required_extensions = ("hea", "dat", "atr")
+
+    return all(
+        (DATA_DIRECTORY / f"{record_id}.{extension}").exists()
+        for extension in required_extensions
+    )
+
+
 def download_dataset() -> None:
-    """Download the required MIT-BIH records when they are not available."""
+    """Download any required MIT-BIH records that are missing locally."""
 
     DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-    first_record_header = DATA_DIRECTORY / f"{ALL_RECORDS[0]}.hea"
+    missing_records = [
+        record_id
+        for record_id in ALL_RECORDS
+        if not record_is_available(record_id)
+    ]
 
-    if first_record_header.exists():
-        print("MIT-BIH records are already available.")
+    if not missing_records:
+        print("All required MIT-BIH records are already available.")
         return
 
-    print("Downloading MIT-BIH records from PhysioNet...")
+    print(f"Downloading missing records: {missing_records}")
 
     wfdb.dl_database(
         db_dir="mitdb",
         dl_dir=str(DATA_DIRECTORY),
-        records=ALL_RECORDS,
+        records=missing_records,
     )
 
-    print("Download completed.")
+    print("Dataset download completed.")
 
 
-def standardize_beat(beat: np.ndarray) -> np.ndarray:
-    """Apply Z-score normalization independently to one ECG beat."""
+def normalize_beat(beat: np.ndarray) -> np.ndarray:
+    """Apply per-beat Z-score normalization."""
 
-    mean = np.mean(beat)
+    mean_value = np.mean(beat)
     standard_deviation = np.std(beat)
 
-    if standard_deviation == 0:
+    if standard_deviation <= 0:
         raise ValueError("The ECG beat has zero standard deviation.")
 
-    return (beat - mean) / standard_deviation
+    return (beat - mean_value) / standard_deviation
 
 
 def extract_beats(record_id: str) -> tuple[np.ndarray, np.ndarray]:
-    """Extract 200-sample R-peak-centered beats from one MIT-BIH record."""
+    """Extract normalized 200-sample beats from one MIT-BIH record."""
 
     record_path = DATA_DIRECTORY / record_id
 
     record = wfdb.rdrecord(str(record_path))
-    annotation = wfdb.rdann(str(record_path), extension="atr")
+    annotation = wfdb.rdann(
+        str(record_path),
+        extension="atr",
+    )
 
+    # Use the first ECG channel, matching the original experiment.
     signal = record.p_signal[:, 0]
 
     beats: list[np.ndarray] = []
-    labels: list[int] = []
+    labels: list[str] = []
 
     for position, symbol in zip(
         annotation.sample,
         annotation.symbol,
         strict=True,
     ):
-        if symbol not in LABEL_MAPPING:
+        if symbol not in VALID_SYMBOLS:
+            continue
+
+        # Preserve the same boundary condition used in main_ai.py.
+        if (
+            position <= WINDOW_BEFORE_R_PEAK
+            or position >= len(signal) - WINDOW_AFTER_R_PEAK
+        ):
             continue
 
         start = position - WINDOW_BEFORE_R_PEAK
         end = position + WINDOW_AFTER_R_PEAK
 
-        if start < 0 or end > len(signal):
-            continue
-
         beat = signal[start:end]
 
-        if len(beat) != WINDOW_SIZE or np.std(beat) == 0:
+        if len(beat) != WINDOW_SIZE:
             continue
 
-        normalized_beat = standardize_beat(beat)
+        if np.std(beat) <= 0:
+            continue
 
-        beats.append(normalized_beat.astype(np.float32))
-        labels.append(LABEL_MAPPING[symbol])
+        normalized_beat = normalize_beat(beat)
+
+        beats.append(normalized_beat)
+        labels.append(symbol)
 
     if not beats:
-        raise RuntimeError(f"No valid beats were extracted from record {record_id}.")
+        raise RuntimeError(
+            f"No valid ECG beats were extracted from record {record_id}."
+        )
 
-    return (
-        np.asarray(beats, dtype=np.float32),
-        np.asarray(labels, dtype=np.int64),
-    )
+    return np.asarray(beats), np.asarray(labels)
 
 
-def load_records(record_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
+def load_records(
+    record_ids: list[str],
+) -> tuple[np.ndarray, np.ndarray]:
     """Load and combine beats from multiple patient records."""
 
     all_beats: list[np.ndarray] = []
@@ -117,32 +141,32 @@ def load_records(record_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
         all_beats.append(beats)
         all_labels.append(labels)
 
-        print(f"Record {record_id}: extracted {len(beats)} beats.")
+        print(
+            f"Record {record_id}: "
+            f"{len(beats)} beats, "
+            f"{dict(Counter(labels))}"
+        )
 
     features = np.concatenate(all_beats, axis=0)
     targets = np.concatenate(all_labels, axis=0)
 
-    # Add the channel dimension required by Conv1D:
-    # (samples, time steps) -> (samples, time steps, channels)
-    features = np.expand_dims(features, axis=-1)
-
+    # Keep features two-dimensional here:
+    # (samples, 200)
+    #
+    # SMOTE must be applied before reshaping the data for Conv1D.
     return features, targets
 
 
-def print_class_distribution(labels: np.ndarray, dataset_name: str) -> None:
-    """Display the number of beats belonging to every class."""
+def print_dataset_summary(
+    features: np.ndarray,
+    labels: np.ndarray,
+    dataset_name: str,
+) -> None:
+    """Print dataset shape and class distribution."""
 
-    inverse_mapping = {
-        value: key for key, value in LABEL_MAPPING.items()
-    }
-
-    unique_labels, counts = np.unique(labels, return_counts=True)
-
-    print(f"\n{dataset_name} class distribution:")
-
-    for label, count in zip(unique_labels, counts, strict=True):
-        class_name = inverse_mapping[int(label)]
-        print(f"  {class_name}: {count}")
+    print(f"\n{dataset_name} dataset:")
+    print(f"Feature shape: {features.shape}")
+    print(f"Class distribution: {dict(Counter(labels))}")
 
 
 def prepare_dataset() -> None:
@@ -157,8 +181,17 @@ def prepare_dataset() -> None:
     print("\nPreparing unseen test record...")
     x_test, y_test = load_records(TEST_RECORDS)
 
-    print_class_distribution(y_train, "Training")
-    print_class_distribution(y_test, "Test")
+    print_dataset_summary(
+        x_train,
+        y_train,
+        "Training",
+    )
+
+    print_dataset_summary(
+        x_test,
+        y_test,
+        "Unseen test",
+    )
 
     np.savez_compressed(
         PROCESSED_DIRECTORY / "train.npz",
@@ -173,11 +206,8 @@ def prepare_dataset() -> None:
     )
 
     print("\nDataset preparation completed.")
-    print(f"Training shape: {x_train.shape}")
-    print(f"Test shape: {x_test.shape}")
-    print(f"Files saved inside: {PROCESSED_DIRECTORY}")
+    print(f"Files saved in: {PROCESSED_DIRECTORY}")
 
 
 if __name__ == "__main__":
     prepare_dataset()
-    
