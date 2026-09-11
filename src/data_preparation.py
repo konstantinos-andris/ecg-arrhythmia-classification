@@ -96,7 +96,7 @@ def extract_beats(record_id: str) -> tuple[np.ndarray, np.ndarray]:
         if symbol not in VALID_SYMBOLS:
             continue
 
-        # Preserve the same boundary condition used in main_ai.py.
+        # Exclude beats too close to the signal boundaries.
         if (
             position <= WINDOW_BEFORE_R_PEAK
             or position >= len(signal) - WINDOW_AFTER_R_PEAK
