@@ -1,36 +1,170 @@
 # ECG Arrhythmia Classification
 
-A deep-learning project for ECG beat classification using a lightweight 1D Convolutional Neural Network and a strict inter-patient evaluation protocol.
+Patient-independent ECG arrhythmia classification using a 1D Convolutional Neural Network, with explicit attention to data leakage, class imbalance, and model explainability.
 
-The project was developed as part of undergraduate research at the University of Thessaly and was accepted for presentation at IEEE CIBCB 2026.
+Developed as part of undergraduate research at the **University of Thessaly** and presented at **IEEE CIBCB 2026**.
 
 ## Overview
 
-The goal of this project is to classify ECG beats from the MIT-BIH Arrhythmia Database while evaluating the model on a completely unseen patient.
+Machine-learning models for ECG classification can achieve very high performance when beats from the same patient appear in both training and testing data. However, this may overestimate how well a model generalizes to previously unseen patients.
 
-Unlike random beat-level splitting, the inter-patient protocol separates patients between training and testing, reducing the risk of data leakage and providing a more realistic evaluation of model generalization.
+This project therefore uses a strict inter-patient evaluation protocol:
 
-## Methodology
+- Training patients: `100, 101, 102, 103, 104, 105, 115`
+- Final test patient: `106`
 
-- Dataset: MIT-BIH Arrhythmia Database
-- Signal preprocessing and beat extraction
-- Z-score normalization
-- Class balancing with SMOTE applied only to the training set
-- Lightweight 1D Convolutional Neural Network
-- Strict patient-independent training and evaluation
-- Classification of normal and ventricular ectopic beats
+Patient 106 is kept completely separate from model training and class balancing and is used only for final evaluation.
 
-## Patient Split
+## Classification Task
 
-### Training records
+The model is trained to distinguish three ECG beat classes:
+
+| Label | Beat type |
+|---|---|
+| `N` | Normal beat |
+| `A` | Atrial premature beat |
+| `V` | Premature ventricular contraction |
+
+The data are obtained from the **MIT-BIH Arrhythmia Database**.
+
+## Pipeline
+
+```text
+MIT-BIH ECG Records
+        │
+        ▼
+  Beat Extraction
+        │
+        ▼
+Z-score Normalization
+        │
+        ▼
+Train / Validation Split
+        │
+        ▼
+SMOTE (Training Only)
+        │
+        ▼
+     1D-CNN
+        │
+        ▼
+Unseen Patient Evaluation
+        │
+        ▼
+Metrics + ROC + Saliency
+```
+
+SMOTE is applied only after separating the validation subset, preventing synthetic samples from leaking into validation data.
+
+The final test patient remains completely independent from both training and validation.
+
+## Dataset
+
+### Training patients
 
 `100, 101, 102, 103, 104, 105, 115`
 
-### Test record
+Training dataset:
+
+- **11,004 ECG beats**
+- `N`: 10,918
+- `A`: 38
+- `V`: 48
+
+### Unseen test patient
 
 `106`
 
-The test patient is not used during model training, normalization fitting or class balancing.
+Final test dataset:
+
+- **2,027 ECG beats**
+- `N`: 1,507
+- `V`: 520
+
+Each extracted ECG beat contains **200 samples**.
+
+## Model
+
+The classifier is implemented as a compact 1D Convolutional Neural Network.
+
+Current implementation:
+
+```text
+Input (200 × 1)
+    │
+Conv1D (32 filters)
+    │
+MaxPooling1D
+    │
+Conv1D (64 filters)
+    │
+MaxPooling1D
+    │
+Flatten
+    │
+Dense (128)
+    │
+Dropout
+    │
+Softmax (3 classes)
+```
+
+Total trainable parameters: **396,035**.
+
+## Reproduced Results
+
+The current repository implementation was evaluated exclusively on unseen patient `106`.
+
+| Metric | Result |
+|---|---:|
+| Accuracy | **83.77%** |
+| Weighted F1-score | **0.810** |
+| N precision | **0.822** |
+| N recall | **0.998** |
+| V precision | **1.000** |
+| V recall | **0.373** |
+| N ROC-AUC | **0.881** |
+| V ROC-AUC | **0.930** |
+
+### Evaluation Visualizations
+
+#### Confusion Matrix
+
+![Confusion Matrix](docs/figures/confusion_matrix.png)
+
+#### ROC Curves
+
+![ROC Curves](docs/figures/roc_curves.png)
+
+### Confusion Matrix
+
+For the two classes present in patient 106:
+
+```text
+              Predicted
+              N      V
+Actual N    1504      0
+Actual V     326    194
+```
+
+Three normal beats were predicted as class `A`, which is absent from the test patient.
+
+The model therefore demonstrates very high precision when identifying ventricular beats, but lower ventricular recall. This highlights an important limitation when generalizing from a severely imbalanced training population to an unseen patient.
+
+Detailed reproduced metrics are available in:
+
+```text
+results/evaluation_metrics.json
+results/classification_report.txt
+```
+
+## Explainability
+
+The project includes gradient-based saliency analysis for ECG beats.
+
+`src/saliency.py` calculates input gradients to examine which regions of an ECG beat most strongly influence the model's prediction.
+
+This can also be used for failure analysis, including ventricular beats incorrectly classified as normal.
 
 ## Project Structure
 
@@ -38,14 +172,19 @@ The test patient is not used during model training, normalization fitting or cla
 ecg-arrhythmia-classification/
 ├── README.md
 ├── requirements.txt
+│
 ├── data/
 │   └── README.md
+│
 ├── docs/
 ├── models/
 ├── notebooks/
+│
 ├── results/
-│   ├── README.md
+│   ├── classification_report.txt
+│   ├── evaluation_metrics.json
 │   └── figures/
+│
 └── src/
     ├── __init__.py
     ├── data_preparation.py
@@ -53,7 +192,8 @@ ecg-arrhythmia-classification/
     ├── train.py
     ├── evaluate.py
     └── saliency.py
-    ```
+```
+
 ## Technologies
 
 - Python
@@ -65,7 +205,7 @@ ecg-arrhythmia-classification/
 - WFDB
 - Matplotlib
 
-## Installation
+## Reproducing the Experiment
 
 Clone the repository:
 
@@ -74,88 +214,67 @@ git clone https://github.com/konstantinos-andris/ecg-arrhythmia-classification.g
 cd ecg-arrhythmia-classification
 ```
 
-Create and activate a virtual environment:
+Create a Python environment:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install the required packages:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Data
+Prepare the MIT-BIH data:
 
-The MIT-BIH Arrhythmia Database is not included in this repository.
+```bash
+python src/data_preparation.py
+```
 
-The dataset can be accessed through PhysioNet and downloaded using the WFDB Python package.
+Train the model:
 
-Place local dataset files inside the `data/` directory. Dataset files are excluded from Git through `.gitignore`.
+```bash
+python src/train.py
+```
 
-## Results
+Evaluate on unseen patient 106:
 
-Final evaluation metrics, confusion matrices and ROC curves will be added after the research materials have been reviewed and prepared for public release.
+```bash
+python src/evaluate.py
+```
+
+Generate a saliency analysis:
+
+```bash
+python src/saliency.py
+```
+
+The dataset is downloaded through the WFDB package and is excluded from version control.
 
 ## Research
 
-This project is connected to research accepted for presentation at IEEE CIBCB 2026.
+This repository is associated with the research work:
 
-Additional publication information will be added after the official proceedings become publicly available.
+**“Robust Arrhythmia Classification from ECG Signals Addressing Data Leakage and Minority Class Management”**
+
+**K. Andris, E. Zarmpouni, K. Kolomvatsos**
+
+Presented at the **IEEE Conference on Computational Intelligence in Bioinformatics and Computational Biology (CIBCB 2026)**, Athens, Greece.
+
+Publication identifiers and the official IEEE Xplore link will be added once the proceedings become publicly available.
+
+> **Note:** The metrics reported in this repository correspond to the current reproducible implementation. They should not be interpreted as a reproduction of every experimental configuration reported in the conference research.
 
 ## Author
 
 **Konstantinos Andris**  
-Undergraduate Student in Informatics and Telecommunications  
+Undergraduate Student, Informatics & Telecommunications  
 University of Thessaly
 
 ## License
 
-The source code and research materials are currently shared for academic and portfolio purposes. A formal license will be selected after confirming the publication and collaboration requirements.
-# Dataset
+The source code is currently provided for academic review and portfolio purposes.
 
-This project uses the MIT-BIH Arrhythmia Database, available through PhysioNet.
-
-## Records Used
-
-### Training Set
-
-- 100
-- 101
-- 102
-- 103
-- 104
-- 105
-- 115
-
-### Test Set
-
-- 106
-
-Record 106 is kept completely separate from the training process to support strict inter-patient evaluation.
-
-## Download
-
-The dataset is not included in this repository.
-
-It can be downloaded from PhysioNet using the WFDB Python package:
-
-```python
-import wfdb
-
-records = ["100", "101", "102", "103", "104", "105", "106", "115"]
-
-wfdb.dl_database(
-    "mitdb",
-    dl_dir="data/mit-bih",
-    records=records
-)
-```
-
-## Important
-
-Dataset files should remain inside the `data/` directory and must not be committed to GitHub.
-
-The repository's `.gitignore` excludes these files while preserving this documentation file.
+No open-source license has been assigned yet.
